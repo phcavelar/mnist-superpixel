@@ -125,9 +125,7 @@ if __name__ == "__main__":
     imgs = dset.train_data.unsqueeze(-1).numpy().astype(np.float64)
     labels = dset.train_labels.numpy()
     
-    print(imgs.shape)
-    
-    epochs = 10
+    epochs = 100
     batch_size = 10
     
     NUM_FEATURES = 1
@@ -148,14 +146,18 @@ if __name__ == "__main__":
         losses = []
         accs = []
         
+        indexes = np.random.permutation(len(dset))
+        
         for b in tqdm(range(0,len(dset),batch_size), total=len(dset), desc="Instances "):
         
             opt.zero_grad()
             
+            batch_indexes = indexes[b:b+batch_size]
+            
             with multiprocessing.Pool(16) as p:
-                graphs = p.map(get_graph_from_image, imgs[b:b+batch_size])
+                graphs = p.map(get_graph_from_image, imgs[batch_indexes])
                 
-            batch_labels = labels[b:b+batch_size]
+            batch_labels = labels[batch_indexes]
             pyt_labels = torch.tensor(batch_labels)
             
             h,adj,src,tgt,graph = batch_graphs(graphs)
