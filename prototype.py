@@ -1,5 +1,7 @@
-from skimage.segmentation import slic
+from tqdm import tqdm
+
 import numpy as np
+from skimage.segmentation import slic
 import networkx as nx
 import multiprocessing
 
@@ -42,22 +44,22 @@ def get_graph_from_image(image,desired_nodes=75):
         nodes[node]["pos_list"] = np.stack(nodes[node]["pos_list"])
         # rgb
         rgb_mean = np.mean(nodes[node]["rgb_list"], axis=0)
-        rgb_std = np.std(nodes[node]["rgb_list"], axis=0)
-        rgb_gram = np.matmul( nodes[node]["rgb_list"].T, nodes[node]["rgb_list"] ) / nodes[node]["rgb_list"].shape[0]
+        #rgb_std = np.std(nodes[node]["rgb_list"], axis=0)
+        #rgb_gram = np.matmul( nodes[node]["rgb_list"].T, nodes[node]["rgb_list"] ) / nodes[node]["rgb_list"].shape[0]
         # Pos
         pos_mean = np.mean(nodes[node]["pos_list"], axis=0)
-        pos_std = np.std(nodes[node]["pos_list"], axis=0)
-        pos_gram = np.matmul( nodes[node]["pos_list"].T, nodes[node]["pos_list"] ) / nodes[node]["pos_list"].shape[0]
+        #pos_std = np.std(nodes[node]["pos_list"], axis=0)
+        #pos_gram = np.matmul( nodes[node]["pos_list"].T, nodes[node]["pos_list"] ) / nodes[node]["pos_list"].shape[0]
         # Debug
         
         features = np.concatenate(
           [
             np.reshape(rgb_mean, -1),
-            np.reshape(rgb_std, -1),
-            np.reshape(rgb_gram, -1),
-            np.reshape(pos_mean, -1),
-            np.reshape(pos_std, -1),
-            np.reshape(pos_gram, -1)
+            #np.reshape(rgb_std, -1),
+            #np.reshape(rgb_gram, -1),
+            #np.reshape(pos_mean, -1),
+            #np.reshape(pos_std, -1),
+            #np.reshape(pos_gram, -1)
           ]
         )
         G.add_node(node, features = list(features))
@@ -84,6 +86,7 @@ def batch_graphs(gs):
     G = len(gs)
     N = sum(len(g.nodes) for g in gs)
     M = 2*sum(len(g.edges) for g in gs)
+    adj = np.zeros([N,N])
     src = np.zeros([N,M])
     tgt = np.zeros([N,M])
     graph = np.zeros([N,G])
@@ -96,6 +99,9 @@ def batch_graphs(gs):
         m = 2*len(g.edges)
         
         for e,(s,t) in enumerate(g.edges):
+            adj[n_acc+s,n_acc+t] = 1
+            adj[n_acc+t,n_acc+s] = 1
+            
             src[n_acc+s,m_acc+e*1] = 1
             tgt[n_acc+t,m_acc+e*1] = 1
             src[n_acc+s,m_acc+e*2] = 1
@@ -107,9 +113,13 @@ def batch_graphs(gs):
         
         n_acc += n
         m_acc += m
-    return map(lambda x:x.astype(np.float32),(h,src,tgt,graph))
+    return map(lambda x:x.astype(np.float32),(h,adj,src,tgt,graph))
+    
+def to_cuda(x):
+    return x.cuda()
 
 if __name__ == "__main__":
+    USE_CUDA = True and torch.cuda.is_available()
     dset = MNIST("./mnist",download=True)
     imgs = dset.train_data.unsqueeze(-1).numpy().astype(np.float64)
     labels = dset.train_labels.numpy()
@@ -117,40 +127,57 @@ if __name__ == "__main__":
     print(imgs.shape)
     
     epochs = 10
-    batch_size = 32
+    batch_size = 10
     
-    NUM_FEATURES = 11
+    NUM_FEATURES = 1
     NUM_CLASSES = 19
     
-    gat1 = model.GATLayer(NUM_FEATURES,16)
-    gat2 = model.GATLayer(16,32)
-    gat3 = model.GATLayer(32,NUM_CLASSES,act=lambda x:x)
+    gat1 = model.GATLayer(NUM_FEATURES,32).cuda()
+    gat2 = model.GATLayer(32,64).cuda()
+    gat3 = model.GATLayer(64,NUM_CLASSES,act=lambda x:x).cuda()
+    if USE_CUDA:
+        gat1,gat2,gat3 = map(to_cuda,(gat1,gat2,gat3))
     
-    opt = torch.optim.Adam(gat1.parameters())
+    opt = torch.optim.Adam([*gat1.parameters(),*gat2.parameters(),*gat3.parameters()])
     
     layers = [gat1,gat2,gat3]
     
-    for e in range(epochs):
-        for b in range(0,len(dset),batch_size):
+    for e in tqdm(range(epochs), total=epochs, desc="Epoch "):
+    
+        losses = []
+        accs = []
+        
+        for b in tqdm(range(0,len(dset),batch_size), total=len(dset), desc="Instances "):
+        
             opt.zero_grad()
-            #with multiprocessing.Pool(16) as p:
-            #    graphs = p.map(get_graph_from_image, imgs[b:b+batch_size])
-            graphs = list(map(get_graph_from_image, imgs[b:b+batch_size]))
+            
+            with multiprocessing.Pool(16) as p:
+                graphs = p.map(get_graph_from_image, imgs[b:b+batch_size])
+                
             batch_labels = labels[b:b+batch_size]
             pyt_labels = torch.tensor(batch_labels)
-            #print(graphs[0].nodes[0])
-            h,src,tgt,graph = batch_graphs(graphs)
-            #print(np.any(np.isnan(tgt)))
-            h,src,tgt,graph = map(torch.tensor,(h,src,tgt,graph))
+            
+            h,adj,src,tgt,graph = batch_graphs(graphs)
+            h,adj,graph = map(torch.tensor,(h,adj,graph))
+            
+            if USE_CUDA:
+                h,adj,graph,pyt_labels = map(to_cuda,(h,adj,graph,pyt_labels))
+            
             x = h
             for l in layers:
-                x = l(x,src,tgt)
-            #print(x)
+                x = l(x,adj)
+                
             y = torch.mm(graph.t(),x)
             loss = F.cross_entropy(input=y,target=pyt_labels)
+            
             pred = torch.argmax(y,dim=1).detach().cpu().numpy()
             acc = np.sum((pred==batch_labels).astype(float)) / batch_labels.shape[0]
-            print(loss.item(), acc)
+            
+            tqdm.write("{loss:.4f} {acc:.2f}%".format(loss=loss.item(), acc=100*acc))
+            
             loss.backward()
             opt.step()
-            #print(labels)
+            
+            losses.append(loss.detach().cpu().item())
+            accs.append(acc)
+        tqdm.write("EPOCH SUMMARY {loss:.4f} {acc:.2f}%".format(loss=np.mean(losses), acc=100*np.mean(accs)))
