@@ -148,7 +148,7 @@ if __name__ == "__main__":
         
         indexes = np.random.permutation(len(dset))
         
-        for b in tqdm(range(0,len(dset),batch_size), total=len(dset), desc="Instances "):
+        for b in tqdm(range(0,len(dset),batch_size), total=len(dset)/batch_size, desc="Instances "):
         
             opt.zero_grad()
             
