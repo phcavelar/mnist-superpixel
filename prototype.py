@@ -1,6 +1,7 @@
 from tqdm import tqdm
 
 import numpy as np
+import scipy as sp
 from skimage.segmentation import slic
 import networkx as nx
 import multiprocessing
@@ -130,7 +131,7 @@ if __name__ == "__main__":
     batch_size = 10
     
     NUM_FEATURES = 1
-    NUM_CLASSES = 19
+    NUM_CLASSES = 10
     
     gat1 = model.GATLayer(NUM_FEATURES,32).cuda()
     gat2 = model.GATLayer(32,64).cuda()
@@ -172,8 +173,9 @@ if __name__ == "__main__":
             
             pred = torch.argmax(y,dim=1).detach().cpu().numpy()
             acc = np.sum((pred==batch_labels).astype(float)) / batch_labels.shape[0]
+            mode = sp.stats.mode(pred)
             
-            tqdm.write("{loss:.4f} {acc:.2f}%".format(loss=loss.item(), acc=100*acc))
+            tqdm.write("{loss:.4f}\t{acc:.2f}%\t{mode} (x{modecount})".format(loss=loss.item(), acc=100*acc, mode=mode[0][0], modecount=mode[1][0]))
             
             loss.backward()
             opt.step()
