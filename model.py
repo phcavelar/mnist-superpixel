@@ -26,10 +26,6 @@ class GATLayer(nn.Module):
         N = x.size()[0]
         hsrc = x.unsqueeze(0).expand(N,-1,-1) # 1,N,i
         htgt = x.unsqueeze(1).expand(-1,N,-1) # N,1,i
-        # An alternative way would be to:
-        #zero = torch.zeros_like(adj).unsqueeze(-1)
-        #hsrc = x.unsqueeze(0) + zero # 1,N,i
-        #htgt = x.unsqueeze(1) + zero # N,1,i
         
         h = torch.cat([hsrc,htgt],dim=2) # N,N,2i
         
