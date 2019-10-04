@@ -58,7 +58,7 @@ def get_graph_from_image(image,desired_nodes=75):
             np.reshape(rgb_mean, -1),
             #np.reshape(rgb_std, -1),
             #np.reshape(rgb_gram, -1),
-            #np.reshape(pos_mean, -1),
+            np.reshape(pos_mean, -1),
             #np.reshape(pos_std, -1),
             #np.reshape(pos_gram, -1)
           ]
@@ -128,7 +128,7 @@ if __name__ == "__main__":
     epochs = 100
     batch_size = 10
     
-    NUM_FEATURES = 1
+    NUM_FEATURES = 3
     NUM_CLASSES = 10
     
     gat1 = model.GATLayer(NUM_FEATURES,32).cuda()
