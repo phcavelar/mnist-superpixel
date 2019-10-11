@@ -11,7 +11,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.datasets import MNIST
 
-from model import GATLayer
+from model import GATLayerAdj as GATLayer
+#from model import GATLayerEdgeSoftmax as GATLayer
+
+NP_TORCH_FLOAT_DTYPE = np.float32
+NP_TORCH_LONG_DTYPE = np.int64
 
 def get_graph_from_image(image,desired_nodes=75): 
     # load the image and convert it to a floating point data type
@@ -88,33 +92,50 @@ def batch_graphs(gs):
     N = sum(len(g.nodes) for g in gs)
     M = 2*sum(len(g.edges) for g in gs)
     adj = np.zeros([N,N])
-    src = np.zeros([N,M])
-    tgt = np.zeros([N,M])
-    graph = np.zeros([N,G])
+    src = np.zeros([M])
+    tgt = np.zeros([M])
+    Msrc = np.zeros([N,M])
+    Mtgt = np.zeros([N,M])
+    Mgraph = np.zeros([N,G])
     h = np.zeros([N,NUM_FEATURES])
     
     n_acc = 0
     m_acc = 0
     for g_idx, g in enumerate(gs):
         n = len(g.nodes)
-        m = 2*len(g.edges)
+        m = len(g.edges)
         
         for e,(s,t) in enumerate(g.edges):
             adj[n_acc+s,n_acc+t] = 1
             adj[n_acc+t,n_acc+s] = 1
             
-            src[n_acc+s,m_acc+e*1] = 1
-            tgt[n_acc+t,m_acc+e*1] = 1
-            src[n_acc+s,m_acc+e*2] = 1
-            tgt[n_acc+t,m_acc+e*2] = 1
+            src[m_acc+e] = n_acc+s
+            tgt[m_acc+e] = n_acc+t
+            
+            src[m_acc+m+e] = n_acc+t
+            tgt[m_acc+m+e] = n_acc+s
+            
+            Msrc[n_acc+s,m_acc+e] = 1
+            Mtgt[n_acc+t,m_acc+e] = 1
+            
+            Msrc[n_acc+t,m_acc+m+e] = 1
+            Mtgt[n_acc+s,m_acc+m+e] = 1
             
         for i in g.nodes:
             h[n_acc+i,:] = g.nodes[i]["features"]
-            graph[n_acc+i,g_idx] = 1
+            Mgraph[n_acc+i,g_idx] = 1
         
         n_acc += n
-        m_acc += m
-    return map(lambda x:x.astype(np.float32),(h,adj,src,tgt,graph))
+        m_acc += 2*m
+    return (
+        h.astype(NP_TORCH_FLOAT_DTYPE),
+        adj.astype(NP_TORCH_FLOAT_DTYPE),
+        src.astype(NP_TORCH_LONG_DTYPE),
+        tgt.astype(NP_TORCH_LONG_DTYPE),
+        Msrc.astype(NP_TORCH_FLOAT_DTYPE),
+        Mtgt.astype(NP_TORCH_FLOAT_DTYPE),
+        Mgraph.astype(NP_TORCH_FLOAT_DTYPE)
+    )
     
 def to_cuda(x):
     return x.cuda()
@@ -141,10 +162,10 @@ class GAT_MNIST(nn.Module):
               ]
         )
     
-    def forward(self,x,adj,graph):
+    def forward(self,x,adj,src,tgt,Msrc,Mtgt,Mgraph):
         for l in self.GAT_layers:
-            x = l(x,adj)
-        x = torch.mm(graph.t(),x)
+            x = l(x,adj,src,tgt,Msrc,Mtgt)
+        x = torch.mm(Mgraph.t(),x)
         for layer,act in zip(self.MLP_layers,self.MLP_acts):
             x = act(layer(x))
         return x
@@ -156,7 +177,7 @@ if __name__ == "__main__":
     labels = dset.targets.numpy()
     
     epochs = 100
-    batch_size = 20
+    batch_size = 2
     
     NUM_FEATURES = 3
     NUM_CLASSES = 10
@@ -190,15 +211,13 @@ if __name__ == "__main__":
                 batch_labels = labels[batch_indexes]
                 pyt_labels = torch.tensor(batch_labels)
                 
-                h,adj,src,tgt,graph = batch_graphs(graphs)
-                h,adj,graph = map(torch.tensor,(h,adj,graph))
+                h,adj,src,tgt,Msrc,Mtgt,Mgraph = batch_graphs(graphs)
+                h,adj,src,tgt,Mtgt,Mgraph = map(torch.tensor,(h,adj,src,tgt,Mtgt,Mgraph))
                 
                 if USE_CUDA:
-                    h,adj,graph,pyt_labels = map(to_cuda,(h,adj,graph,pyt_labels))
-                
-                x = h
+                    h,adj,src,tgt,Mtgt,Mgraph,pyt_labels = map(to_cuda,(h,adj,src,tgt,Mtgt,Mgraph,pyt_labels))
                     
-                y = model(x,adj,graph)
+                y = model(h,adj,src,tgt,Msrc,Mtgt,Mgraph)
                 loss = F.cross_entropy(input=y,target=pyt_labels)
                 
                 pred = torch.argmax(y,dim=1).detach().cpu().numpy()
