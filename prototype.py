@@ -1,5 +1,7 @@
 from tqdm import tqdm
 
+import random
+import copy
 import numpy as np
 import scipy as sp
 from skimage.segmentation import slic
@@ -144,6 +146,26 @@ def batch_graphs(gs):
 def to_cuda(x):
     return x.cuda()
     
+def split_dataset(labels, valid_split=0.1):
+    idx = np.random.permutation(len(labels))
+    valid_idx = []
+    train_idx = []
+    label_count = [0 for _ in range(1+max(labels))]
+    valid_count = [0 for _ in label_count]
+    
+    for i in idx:
+        label_count[labels[i]] += 1
+    
+    
+    for i in idx:
+        l = labels[i]
+        if valid_count[l] < label_count[l]*valid_split:
+            valid_count[l] += 1
+            valid_idx.append(i)
+        else:
+            train_idx.append(i)
+    return train_idx, valid_idx
+    
 class GAT_MNIST(nn.Module):
     
     def __init__(self,num_features,num_classes):
@@ -180,6 +202,8 @@ if __name__ == "__main__":
     imgs = dset.data.unsqueeze(-1).numpy().astype(np.float64)
     labels = dset.targets.numpy()
     
+    train_idx, valid_idx = map(np.array,split_dataset(labels))
+    
     epochs = 100
     batch_size = 20
     
@@ -192,18 +216,22 @@ if __name__ == "__main__":
     
     opt = torch.optim.Adam(model.parameters())
     
-    last_epoch_loss = 0.
-    last_epoch_acc = 0.
+    best_valid_acc = 0.
+    best_model = copy.deepcopy(model.cpu())
+    
+    last_epoch_train_loss = 0.
+    last_epoch_train_acc = 0.
+    last_epoch_valid_acc = 0.
     
     for e in tqdm(range(epochs), total=epochs, desc="Epoch "):
         
         try:
-            losses = []
-            accs = []
+            train_losses = []
+            train_accs = []
             
-            indexes = np.random.permutation(len(dset))
+            indexes = train_idx[np.random.permutation(len(train_idx))]
             
-            for b in tqdm(range(0,len(dset),batch_size), total=len(dset)/batch_size, desc="Instances "):
+            for b in tqdm(range(0,len(indexes),batch_size), total=len(indexes)/batch_size, desc="Instances "):
             
                 opt.zero_grad()
                 
@@ -229,31 +257,69 @@ if __name__ == "__main__":
                 mode = sp.stats.mode(pred)
                 
                 tqdm.write(
-                      "{loss:.4f}\t{acc:.2f}%\t{mode} (x{modecount})\t\tLAST {eloss:.4f} {eacc:.2f}%".format(
+                      "{loss:.4f}\t{acc:.2f}%\t{mode} (x{modecount})\t\tLAST {eloss:.4f} {etacc:.2f}% {evacc:.2f}%".format(
                           loss=loss.item(),
                           acc=100*acc,
                           mode=mode[0][0],
                           modecount=mode[1][0],
-                          eloss=last_epoch_loss,
-                          eacc=last_epoch_acc
+                          eloss=last_epoch_train_loss,
+                          etacc=last_epoch_train_acc,
+                          evacc=last_epoch_valid_acc
                       )
                 )
                 
                 loss.backward()
                 opt.step()
                 
-                losses.append(loss.detach().cpu().item())
-                accs.append(acc)
+                train_losses.append(loss.detach().cpu().item())
+                train_accs.append(acc)
+                break
+            
+            valid_accs = []
+            for i in tqdm(range(len(indexes)), total=len(indexes), desc="Validation "):
+                with torch.no_grad():
+                    idx = valid_idx[i]
                 
-            last_epoch_loss = np.mean(losses)
-            last_epoch_acc = 100*np.mean(accs)
-            tqdm.write("EPOCH SUMMARY {loss:.4f} {acc:.2f}%".format(loss=last_epoch_loss, acc=last_epoch_acc))
+                    graphs = [get_graph_from_image(imgs[idx])]
+                    batch_labels = labels[idx:idx+1]
+                    pyt_labels = torch.tensor(batch_labels)
+                    
+                    h,adj,src,tgt,Msrc,Mtgt,Mgraph = batch_graphs(graphs)
+                    h,adj,src,tgt,Msrc,Mtgt,Mgraph = map(torch.tensor,(h,adj,src,tgt,Msrc,Mtgt,Mgraph))
+                    
+                    if USE_CUDA:
+                        h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels = map(to_cuda,(h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels))
+                    
+                    y = model(h,adj,src,tgt,Msrc,Mtgt,Mgraph)
+                    
+                    pred = torch.argmax(y,dim=1).detach().cpu().numpy()
+                    acc = np.sum((pred==batch_labels).astype(float)) / batch_labels.shape[0]
+                    
+                    valid_accs.append(acc)
+                    break
+                    
+            last_epoch_train_loss = np.mean(train_losses)
+            last_epoch_train_acc = 100*np.mean(train_accs)
+            last_epoch_valid_acc = 100*np.mean(valid_accs)
+            
+            if last_epoch_valid_acc>best_valid_acc:
+                best_valid_acc = last_epoch_valid_acc
+                best_model = copy.deepcopy(model.cpu())
+            
+            tqdm.write("EPOCH SUMMARY {loss:.4f} {t_acc:.2f}% {v_acc:.2f}%".format(loss=last_epoch_train_loss, t_acc=last_epoch_train_acc, v_acc=last_epoch_valid_acc))
+            break
+            
         except KeyboardInterrupt:
             print("Training interrupted!")
-            last_epoch_loss = np.mean(losses)
-            last_epoch_acc = 100*np.mean(accs)
-            print("EPOCH SUMMARY {loss:.4f} {acc:.2f}%".format(loss=last_epoch_loss, acc=last_epoch_acc))
+            last_epoch_train_loss = np.mean(train_losses)
+            last_epoch_train_acc = 100*np.mean(train_accs)
+            last_epoch_valid_acc = 100*np.mean(valid_accs)
+            print("EPOCH SUMMARY {loss:.4f} {t_acc:.2f}% {v_acc:.2f}%".format(loss=last_epoch_train_loss, t_acc=last_epoch_train_acc, v_acc=last_epoch_valid_acc))
             break
+    
+    model = best_model
+    if USE_CUDA:
+        model = model.gpu()
     
     test_dset = MNIST("./mnist",train=False,download=True)
     test_imgs = test_dset.data.unsqueeze(-1).numpy().astype(np.float64)
@@ -266,14 +332,13 @@ if __name__ == "__main__":
             batch_labels = labels[i:i+1]
             pyt_labels = torch.tensor(batch_labels)
             
-            h,adj,src,tgt,graph = batch_graphs(graphs)
-            h,adj,graph = map(torch.tensor,(h,adj,graph))
+            h,adj,src,tgt,Msrc,Mtgt,Mgraph = batch_graphs(graphs)
+            h,adj,src,tgt,Msrc,Mtgt,Mgraph = map(torch.tensor,(h,adj,src,tgt,Msrc,Mtgt,Mgraph))
             
             if USE_CUDA:
-                h,adj,graph,pyt_labels = map(to_cuda,(h,adj,graph,pyt_labels))
-            
-            x = h
-            y = model(x,adj,graph)
+                h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels = map(to_cuda,(h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels))
+                
+            y = model(h,adj,src,tgt,Msrc,Mtgt,Mgraph)
             
             pred = torch.argmax(y,dim=1).detach().cpu().numpy()
             acc = np.sum((pred==batch_labels).astype(float)) / batch_labels.shape[0]
