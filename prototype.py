@@ -177,7 +177,7 @@ if __name__ == "__main__":
     labels = dset.targets.numpy()
     
     epochs = 100
-    batch_size = 2
+    batch_size = 20
     
     NUM_FEATURES = 3
     NUM_CLASSES = 10
