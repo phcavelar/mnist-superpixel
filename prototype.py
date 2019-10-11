@@ -79,10 +79,15 @@ def get_graph_from_image(image,desired_nodes=75):
     vs_below = np.vstack([segments[:-1,:].ravel(), segments[1:,:].ravel()])
     bneighbors = np.unique(np.hstack([vs_right, vs_below]), axis=1)
 
+    # Adjacency loops
     for i in range(bneighbors.shape[1]):
         if bneighbors[0,i] != bneighbors[1,i]:
             G.add_edge(bneighbors[0,i],bneighbors[1,i])
-        #end if
+    
+    # Self loops
+    for node in nodes:
+        G.add_edge(node,node)
+    
     return G
 
 def batch_graphs(gs):
