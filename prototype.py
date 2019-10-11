@@ -248,8 +248,8 @@ if __name__ == "__main__":
     last_epoch_train_acc = 0.
     last_epoch_valid_acc = 0.
     
+    interrupted = False
     for e in tqdm(range(epochs), total=epochs, desc="Epoch "):
-        
         try:
             train_losses = []
             train_accs = []
@@ -299,32 +299,24 @@ if __name__ == "__main__":
                 train_losses.append(loss.detach().cpu().item())
                 train_accs.append(acc)
             
-            valid_accs = test(imgs,labels,valid_idx,model,desc="Validation ")
-                    
-            last_epoch_train_loss = np.mean(train_losses)
-            last_epoch_train_acc = 100*np.mean(train_accs)
-            last_epoch_valid_acc = 100*np.mean(valid_accs)
-            
-            if last_epoch_valid_acc>best_valid_acc:
-                best_valid_acc = last_epoch_valid_acc
-                best_model = copy.deepcopy(model)
-            
-            tqdm.write("EPOCH SUMMARY {loss:.4f} {t_acc:.2f}% {v_acc:.2f}%".format(loss=last_epoch_train_loss, t_acc=last_epoch_train_acc, v_acc=last_epoch_valid_acc))
-            
         except KeyboardInterrupt:
             print("Training interrupted!")
+            interrupted = True
             
-            valid_accs = test(imgs,labels,valid_idx,model,desc="Validation ")
-                    
-            last_epoch_train_loss = np.mean(train_losses)
-            last_epoch_train_acc = 100*np.mean(train_accs)
-            last_epoch_valid_acc = 100*np.mean(valid_accs)
-            
-            if last_epoch_valid_acc>best_valid_acc:
-                best_valid_acc = last_epoch_valid_acc
-                best_model = copy.deepcopy(model)
-            
-            tqdm.write("EPOCH SUMMARY {loss:.4f} {t_acc:.2f}% {v_acc:.2f}%".format(loss=last_epoch_train_loss, t_acc=last_epoch_train_acc, v_acc=last_epoch_valid_acc))
+        valid_accs = test(imgs,labels,valid_idx,model,desc="Validation ")
+                
+        last_epoch_train_loss = np.mean(train_losses)
+        last_epoch_train_acc = 100*np.mean(train_accs)
+        last_epoch_valid_acc = 100*np.mean(valid_accs)
+        
+        if last_epoch_valid_acc>best_valid_acc:
+            best_valid_acc = last_epoch_valid_acc
+            best_model = copy.deepcopy(model)
+        
+        tqdm.write("EPOCH SUMMARY {loss:.4f} {t_acc:.2f}% {v_acc:.2f}%".format(loss=last_epoch_train_loss, t_acc=last_epoch_train_acc, v_acc=last_epoch_valid_acc))
+        
+        if interrupted:
+            break
     
     test_dset = MNIST("./mnist",train=False,download=True)
     test_imgs = test_dset.data.unsqueeze(-1).numpy().astype(np.float64)
