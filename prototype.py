@@ -11,8 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.datasets import MNIST
 
-from model import GATLayerAdj as GATLayer
-#from model import GATLayerEdgeSoftmax as GATLayer
+from model import GATLayerEdgeSoftmax as GATLayer
 
 NP_TORCH_FLOAT_DTYPE = np.float32
 NP_TORCH_LONG_DTYPE = np.int64
@@ -212,10 +211,10 @@ if __name__ == "__main__":
                 pyt_labels = torch.tensor(batch_labels)
                 
                 h,adj,src,tgt,Msrc,Mtgt,Mgraph = batch_graphs(graphs)
-                h,adj,src,tgt,Mtgt,Mgraph = map(torch.tensor,(h,adj,src,tgt,Mtgt,Mgraph))
+                h,adj,src,tgt,Msrc,Mtgt,Mgraph = map(torch.tensor,(h,adj,src,tgt,Msrc,Mtgt,Mgraph))
                 
                 if USE_CUDA:
-                    h,adj,src,tgt,Mtgt,Mgraph,pyt_labels = map(to_cuda,(h,adj,src,tgt,Mtgt,Mgraph,pyt_labels))
+                    h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels = map(to_cuda,(h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels))
                     
                 y = model(h,adj,src,tgt,Msrc,Mtgt,Mgraph)
                 loss = F.cross_entropy(input=y,target=pyt_labels)

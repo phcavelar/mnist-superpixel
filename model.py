@@ -5,7 +5,7 @@ import numpy as np
 
 class GATLayerAdj(nn.Module):
     """
-    More didatic (and slower) GAT layer
+    More didatic (also memory-hungry) GAT layer
     """
 
     def __init__(self,d_i,d_o,act=F.relu,eps=1e-6):
@@ -14,7 +14,6 @@ class GATLayerAdj(nn.Module):
         self.w = nn.Linear(2*d_i,1)
         self.act = act
         self._init_weights()
-        self.eps = torch.tensor([eps])
         
     
     def _init_weights(self):
@@ -49,13 +48,16 @@ class GATLayerAdj(nn.Module):
         return o
 
 class GATLayerEdgeAverage(nn.Module):
+    """
+    GAT layer with average, instead of softmax, attention distribution
+    """
     def __init__(self,d_i,d_o,act=F.relu,eps=1e-6):
         super(GATLayerEdgeAverage,self).__init__()
         self.f = nn.Linear(2*d_i,d_o)
         self.w = nn.Linear(2*d_i,1)
         self.act = act
         self._init_weights()
-        self.eps = torch.tensor([eps])
+        self.eps = eps
         
     
     def _init_weights(self):
@@ -76,22 +78,23 @@ class GATLayerEdgeAverage(nn.Module):
         h = torch.cat([hsrc,htgt],dim=1) # E,2i
         y = self.act(self.f(h)) # E,o
         a = self.w(h) # E,1
-        assert not torch.isnan(a).any()
         a_sum = torch.mm(Mtgt,a) + self.eps # N,E x E,1 = N,1
-        assert not torch.isnan(a_sum).any()
         o = torch.mm(Mtgt,y * a) / a_sum # N,1
         assert not torch.isnan(o).any()
 
         return o
 
 class GATLayerEdgeSoftmax(nn.Module):
+    """
+    GAT layer with softmax attention distribution (May be prone to numerical errors)
+    """
     def __init__(self,d_i,d_o,act=F.relu,eps=1e-6):
         super(GATLayerEdgeSoftmax,self).__init__()
         self.f = nn.Linear(2*d_i,d_o)
         self.w = nn.Linear(2*d_i,1)
         self.act = act
         self._init_weights()
-        self.eps = torch.tensor([eps])
+        self.eps = eps
         
     
     def _init_weights(self):
