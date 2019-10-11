@@ -166,6 +166,31 @@ def split_dataset(labels, valid_split=0.1):
             train_idx.append(i)
     return train_idx, valid_idx
     
+def test(images,labels,indexes,model, desc="Test "):
+    test_accs = []
+    for i in tqdm(range(len(indexes)), total=len(indexes), desc=desc):
+        with torch.no_grad():
+            idx = indexes[i]
+        
+            graphs = [get_graph_from_image(images[idx])]
+            batch_labels = labels[idx:idx+1]
+            pyt_labels = torch.tensor(batch_labels)
+            
+            h,adj,src,tgt,Msrc,Mtgt,Mgraph = batch_graphs(graphs)
+            h,adj,src,tgt,Msrc,Mtgt,Mgraph = map(torch.tensor,(h,adj,src,tgt,Msrc,Mtgt,Mgraph))
+            
+            if USE_CUDA:
+                h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels = map(to_cuda,(h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels))
+            
+            y = model(h,adj,src,tgt,Msrc,Mtgt,Mgraph)
+            
+            pred = torch.argmax(y,dim=1).detach().cpu().numpy()
+            acc = np.sum((pred==batch_labels).astype(float)) / batch_labels.shape[0]
+            
+            test_accs.append(acc)
+    return test_accs
+
+
 class GAT_MNIST(nn.Module):
     
     def __init__(self,num_features,num_classes):
@@ -205,7 +230,7 @@ if __name__ == "__main__":
     train_idx, valid_idx = map(np.array,split_dataset(labels))
     
     epochs = 100
-    batch_size = 20
+    batch_size = 100
     
     NUM_FEATURES = 3
     NUM_CLASSES = 10
@@ -217,7 +242,7 @@ if __name__ == "__main__":
     opt = torch.optim.Adam(model.parameters())
     
     best_valid_acc = 0.
-    best_model = copy.deepcopy(model.cpu())
+    best_model = copy.deepcopy(model)
     
     last_epoch_train_loss = 0.
     last_epoch_train_acc = 0.
@@ -273,30 +298,8 @@ if __name__ == "__main__":
                 
                 train_losses.append(loss.detach().cpu().item())
                 train_accs.append(acc)
-                break
             
-            valid_accs = []
-            for i in tqdm(range(len(indexes)), total=len(indexes), desc="Validation "):
-                with torch.no_grad():
-                    idx = valid_idx[i]
-                
-                    graphs = [get_graph_from_image(imgs[idx])]
-                    batch_labels = labels[idx:idx+1]
-                    pyt_labels = torch.tensor(batch_labels)
-                    
-                    h,adj,src,tgt,Msrc,Mtgt,Mgraph = batch_graphs(graphs)
-                    h,adj,src,tgt,Msrc,Mtgt,Mgraph = map(torch.tensor,(h,adj,src,tgt,Msrc,Mtgt,Mgraph))
-                    
-                    if USE_CUDA:
-                        h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels = map(to_cuda,(h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels))
-                    
-                    y = model(h,adj,src,tgt,Msrc,Mtgt,Mgraph)
-                    
-                    pred = torch.argmax(y,dim=1).detach().cpu().numpy()
-                    acc = np.sum((pred==batch_labels).astype(float)) / batch_labels.shape[0]
-                    
-                    valid_accs.append(acc)
-                    break
+            valid_accs = test(imgs,labels,valid_idx,model,desc="Validation ")
                     
             last_epoch_train_loss = np.mean(train_losses)
             last_epoch_train_acc = 100*np.mean(train_accs)
@@ -304,47 +307,29 @@ if __name__ == "__main__":
             
             if last_epoch_valid_acc>best_valid_acc:
                 best_valid_acc = last_epoch_valid_acc
-                best_model = copy.deepcopy(model.cpu())
+                best_model = copy.deepcopy(model)
             
             tqdm.write("EPOCH SUMMARY {loss:.4f} {t_acc:.2f}% {v_acc:.2f}%".format(loss=last_epoch_train_loss, t_acc=last_epoch_train_acc, v_acc=last_epoch_valid_acc))
-            break
             
         except KeyboardInterrupt:
             print("Training interrupted!")
+            
+            valid_accs = test(imgs,labels,valid_idx,model,desc="Validation ")
+                    
             last_epoch_train_loss = np.mean(train_losses)
             last_epoch_train_acc = 100*np.mean(train_accs)
             last_epoch_valid_acc = 100*np.mean(valid_accs)
-            print("EPOCH SUMMARY {loss:.4f} {t_acc:.2f}% {v_acc:.2f}%".format(loss=last_epoch_train_loss, t_acc=last_epoch_train_acc, v_acc=last_epoch_valid_acc))
-            break
-    
-    model = best_model
-    if USE_CUDA:
-        model = model.gpu()
+            
+            if last_epoch_valid_acc>best_valid_acc:
+                best_valid_acc = last_epoch_valid_acc
+                best_model = copy.deepcopy(model)
+            
+            tqdm.write("EPOCH SUMMARY {loss:.4f} {t_acc:.2f}% {v_acc:.2f}%".format(loss=last_epoch_train_loss, t_acc=last_epoch_train_acc, v_acc=last_epoch_valid_acc))
     
     test_dset = MNIST("./mnist",train=False,download=True)
     test_imgs = test_dset.data.unsqueeze(-1).numpy().astype(np.float64)
     test_labels = test_dset.targets.numpy()
     
-    accs = []
-    for i in tqdm(range(test_imgs.shape[0]), total=test_imgs.shape[0], desc="Test Instances "):
-        with torch.no_grad():
-            graphs = [get_graph_from_image(test_imgs[i])]
-            batch_labels = labels[i:i+1]
-            pyt_labels = torch.tensor(batch_labels)
-            
-            h,adj,src,tgt,Msrc,Mtgt,Mgraph = batch_graphs(graphs)
-            h,adj,src,tgt,Msrc,Mtgt,Mgraph = map(torch.tensor,(h,adj,src,tgt,Msrc,Mtgt,Mgraph))
-            
-            if USE_CUDA:
-                h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels = map(to_cuda,(h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels))
-                
-            y = model(h,adj,src,tgt,Msrc,Mtgt,Mgraph)
-            
-            pred = torch.argmax(y,dim=1).detach().cpu().numpy()
-            acc = np.sum((pred==batch_labels).astype(float)) / batch_labels.shape[0]
-            
-            accs.append(acc)
-    
-    last_epoch_loss = np.mean(losses)
+    test_accs = test(test_imgs,test_labels,list(range(len(test_labels))),best_model,desc="Test ")
     last_epoch_acc = 100*np.mean(accs)
     print("TEST RESULTS: {acc:.2f}%".format(acc=last_epoch_acc))
