@@ -230,7 +230,7 @@ if __name__ == "__main__":
     train_idx, valid_idx = map(np.array,split_dataset(labels))
     
     epochs = 100
-    batch_size = 100
+    batch_size = 32
     
     NUM_FEATURES = 3
     NUM_CLASSES = 10
