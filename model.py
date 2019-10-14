@@ -130,6 +130,37 @@ class GATLayerEdgeSoftmax(nn.Module):
 
         return o
 
+
+class GAT_MNIST(nn.Module):
+    
+    def __init__(self,num_features,num_classes):
+        super(GAT_MNIST,self).__init__()
+        
+        self.GAT_layer_sizes = [num_features,32,64,64]
+        self.MLP_layer_sizes = [self.GAT_layer_sizes[-1],32,num_classes]
+        self.MLP_acts = [F.relu,lambda x:x]
+        
+        self.GAT_layers = nn.ModuleList(
+              [
+                GATLayerEdgeSoftmax(d_in,d_out)
+                for d_in,d_out in zip(self.GAT_layer_sizes[:-1],self.GAT_layer_sizes[1:])
+              ]
+        )
+        self.MLP_layers = nn.ModuleList(
+              [
+                nn.Linear(d_in,d_out)
+                for d_in,d_out in zip(self.MLP_layer_sizes[:-1],self.MLP_layer_sizes[1:])
+              ]
+        )
+    
+    def forward(self,x,adj,src,tgt,Msrc,Mtgt,Mgraph):
+        for l in self.GAT_layers:
+            x = l(x,adj,src,tgt,Msrc,Mtgt)
+        x = torch.mm(Mgraph.t(),x)
+        for layer,act in zip(self.MLP_layers,self.MLP_acts):
+            x = act(layer(x))
+        return x
+
 if __name__ == "__main__":
     g = GATLayer(3,10)
     x = torch.tensor([[0.,0,0],[1,1,1]])
