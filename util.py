@@ -1,11 +1,15 @@
 from tqdm import tqdm
+import fire
+
 import pickle
+import multiprocessing
 
 import numpy as np
 import scipy as sp
-from skimage.segmentation import slic
+from skimage.segmentation import slic, mark_boundaries
 import networkx as nx
-import multiprocessing
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 import torch
 import torch.nn as nn
@@ -20,7 +24,61 @@ NP_TORCH_LONG_DTYPE = np.int64
 NUM_FEATURES = 3
 NUM_CLASSES = 10
 
-def get_graph_from_image(image,desired_nodes=75): 
+def plot_image(image,desired_nodes=75,save_in=None):
+    # show the output of SLIC
+    fig = plt.figure("Image")
+    ax = fig.add_subplot(1, 1, 1)
+    ax.imshow(image)#, cmap="gray")
+    plt.axis("off")
+    
+    # show the plots
+    if save_in is None:
+        plt.show()
+    else:
+        plt.savefig(save_in,bbox_inches="tight")
+    plt.close()
+
+def plot_graph_from_image(image,desired_nodes=75,save_in=None):
+    segments = slic(image, slic_zero = True)
+
+    # show the output of SLIC
+    fig = plt.figure("Superpixels")
+    ax = fig.add_subplot(1, 1, 1)
+    #ax.imshow(mark_boundaries(image, segments), cmap="gray")
+    ax.imshow(image)#, cmap="gray")
+    plt.axis("off")
+
+    asegments = np.array(segments)
+
+    # From https://stackoverflow.com/questions/26237580/skimage-slic-getting-neighbouring-segments
+
+    segments_ids = np.unique(segments)
+
+    # centers
+    centers = np.array([np.mean(np.nonzero(segments==i),axis=1) for i in segments_ids])
+
+    vs_right = np.vstack([segments[:,:-1].ravel(), segments[:,1:].ravel()])
+    vs_below = np.vstack([segments[:-1,:].ravel(), segments[1:,:].ravel()])
+    bneighbors = np.unique(np.hstack([vs_right, vs_below]), axis=1)
+
+    plt.scatter(centers[:,1],centers[:,0], c='r')
+
+    for i in range(bneighbors.shape[1]):
+        y0,x0 = centers[bneighbors[0,i]]
+        y1,x1 = centers[bneighbors[1,i]]
+
+        l = Line2D([x0,x1],[y0,y1], c="r", alpha=0.5)
+        ax.add_line(l)
+
+    # show the plots
+    if save_in is None:
+        plt.show()
+    else:
+        plt.savefig(save_in,bbox_inches="tight")
+    plt.close()
+
+
+def get_graph_from_image(image,desired_nodes=75):
     # load the image and convert it to a floating point data type
     segments = slic(image, n_segments=desired_nodes, slic_zero = True)
     asegments = np.array(segments)
@@ -245,3 +303,29 @@ def test(model, images, labels, indexes, use_cuda, desc="Test ", disable_tqdm=Fa
             
             test_accs.append(acc)
     return test_accs
+
+def main_plot(dset_folder,save):
+    dset = MNIST(dset_folder,download=True)
+    imgs = dset.data.unsqueeze(-1).numpy().astype(np.float64)
+    labels = dset.targets.numpy()
+    total_labels = set(labels)
+    plotted_labels = set()
+    i = 0
+    while len(plotted_labels) < len(total_labels):
+        if labels[i] not in plotted_labels:
+            plotted_labels.add(labels[i])
+            plot_image(imgs[i,:,:,0],save_in=(None if not save else "{}i.png".format(labels[i])))
+            plot_graph_from_image(imgs[i,:,:,0],save_in=(None if not save else "{}g.png".format(labels[i])))
+        i+=1
+
+def main(
+        plot_mnist:bool=False,
+        save_plot_mnist:bool=False,
+        dset_folder:str = "./mnist"
+        ):
+    if plot_mnist or save_plot_mnist:
+        main_plot(dset_folder=dset_folder,save=save_plot_mnist)
+
+
+if __name__ == "__main__":
+    fire.Fire(main)
