@@ -285,6 +285,9 @@ def train(model, optimiser, graphs, labels, train_idx, use_cuda, batch_size=1, d
         th = time.time()
         loss.backward()
         optimiser.step()
+        
+        train_losses.append(loss.detach().cpu().item())
+        train_accs.append(acc)
         if profile:
             ti = time.time()
             
