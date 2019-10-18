@@ -1,6 +1,7 @@
 from tqdm import tqdm
 import fire
 
+import time
 import pickle
 import multiprocessing
 
@@ -77,7 +78,6 @@ def plot_graph_from_image(image,desired_nodes=75,save_in=None):
         plt.savefig(save_in,bbox_inches="tight")
     plt.close()
 
-
 def get_graph_from_image(image,desired_nodes=75):
     # load the image and convert it to a floating point data type
     segments = slic(image, n_segments=desired_nodes, slic_zero = True)
@@ -150,49 +150,56 @@ def get_graph_from_image(image,desired_nodes=75):
     for node in nodes:
         G.add_edge(node,node)
     
-    return G
+    n = len(G.nodes)
+    m = len(G.edges)
+    h = np.zeros([n,NUM_FEATURES]).astype(NP_TORCH_FLOAT_DTYPE)
+    edges = np.zeros([2*m,2]).astype(NP_TORCH_LONG_DTYPE)
+    for e,(s,t) in enumerate(G.edges):
+        edges[e,0] = s
+        edges[e,1] = t
+        
+        edges[m+e,0] = t
+        edges[m+e,1] = s
+    #end for
+    for i in G.nodes:
+        h[i,:] = G.nodes[i]["features"]
+    #end for
+    del G
+    return h, edges
 
 def batch_graphs(gs):
-    NUM_FEATURES = len(gs[0].nodes[0]["features"])
+    NUM_FEATURES = gs[0][0].shape[-1]
     G = len(gs)
-    N = sum(len(g.nodes) for g in gs)
-    M = 2*sum(len(g.edges) for g in gs)
+    N = sum(g[0].shape[0] for g in gs)
+    M = sum(g[1].shape[0] for g in gs)
     adj = np.zeros([N,N])
     src = np.zeros([M])
     tgt = np.zeros([M])
     Msrc = np.zeros([N,M])
     Mtgt = np.zeros([N,M])
     Mgraph = np.zeros([N,G])
-    h = np.zeros([N,NUM_FEATURES])
+    h = np.concatenate([g[0] for g in gs])
     
     n_acc = 0
     m_acc = 0
     for g_idx, g in enumerate(gs):
-        n = len(g.nodes)
-        m = len(g.edges)
+        n = g[0].shape[0]
+        m = g[1].shape[0]
         
-        for e,(s,t) in enumerate(g.edges):
+        for e,(s,t) in enumerate(g[1]):
             adj[n_acc+s,n_acc+t] = 1
             adj[n_acc+t,n_acc+s] = 1
             
             src[m_acc+e] = n_acc+s
             tgt[m_acc+e] = n_acc+t
             
-            src[m_acc+m+e] = n_acc+t
-            tgt[m_acc+m+e] = n_acc+s
-            
             Msrc[n_acc+s,m_acc+e] = 1
             Mtgt[n_acc+t,m_acc+e] = 1
             
-            Msrc[n_acc+t,m_acc+m+e] = 1
-            Mtgt[n_acc+s,m_acc+m+e] = 1
-            
-        for i in g.nodes:
-            h[n_acc+i,:] = g.nodes[i]["features"]
-            Mgraph[n_acc+i,g_idx] = 1
+        Mgraph[n_acc:n_acc+n,g_idx] = 1
         
         n_acc += n
-        m_acc += 2*m
+        m_acc += m
     return (
         h.astype(NP_TORCH_FLOAT_DTYPE),
         adj.astype(NP_TORCH_FLOAT_DTYPE),
@@ -232,36 +239,39 @@ def split_dataset(labels, valid_split=0.1):
             train_idx.append(i)
     return train_idx, valid_idx
 
-def train(model, optimiser, images, labels, train_idx, use_cuda, batch_size=1, disable_tqdm=False):
+def train(model, optimiser, graphs, labels, train_idx, use_cuda, batch_size=1, disable_tqdm=False, profile=False):
     train_losses = []
     train_accs = []
     
     indexes = train_idx[np.random.permutation(len(train_idx))]
+    pyt_labels = torch.tensor(labels)
+    
+    if use_cuda:
+        pyt_labels = pyt_labels.cuda()
     
     for b in tqdm(range(0,len(indexes),batch_size), total=len(indexes)/batch_size, desc="Instances ", disable=disable_tqdm):
-    
+        ta = time.time()
         optimiser.zero_grad()
         
         batch_indexes = indexes[b:b+batch_size]
         
-        with multiprocessing.Pool(16) as p:
-            graphs = p.map(get_graph_from_image, images[batch_indexes])
-            
-        batch_labels = labels[batch_indexes]
-        pyt_labels = torch.tensor(batch_labels)
-        
-        h,adj,src,tgt,Msrc,Mtgt,Mgraph = batch_graphs(graphs)
-        h,adj,src,tgt,Msrc,Mtgt,Mgraph = map(torch.tensor,(h,adj,src,tgt,Msrc,Mtgt,Mgraph))
-        
+        batch_labels = pyt_labels[batch_indexes]
+        tb = time.time()
+        h,adj,src,tgt,Msrc,Mtgt,Mgraph = batch_graphs(graphs[batch_indexes])
+        tc = time.time()
+        h,adj,src,tgt,Msrc,Mtgt,Mgraph = map(torch.from_numpy,(h,adj,src,tgt,Msrc,Mtgt,Mgraph))
+        td = time.time()
         if use_cuda:
-            h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels = map(to_cuda,(h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels))
-            
+            h,adj,src,tgt,Msrc,Mtgt,Mgraph = map(to_cuda,(h,adj,src,tgt,Msrc,Mtgt,Mgraph))
+        te = time.time()
         y = model(h,adj,src,tgt,Msrc,Mtgt,Mgraph)
-        loss = F.cross_entropy(input=y,target=pyt_labels)
+        tf = time.time()
+        loss = F.cross_entropy(input=y,target=batch_labels)
         
         pred = torch.argmax(y,dim=1).detach().cpu().numpy()
-        acc = np.sum((pred==batch_labels).astype(float)) / batch_labels.shape[0]
+        acc = np.sum((pred==labels[batch_indexes]).astype(float)) / batch_labels.shape[0]
         mode = sp.stats.mode(pred)
+        tg = time.time()
         
         tqdm.write(
               "{loss:.4f}\t{acc:.2f}%\t{mode} (x{modecount})".format(
@@ -272,26 +282,36 @@ def train(model, optimiser, images, labels, train_idx, use_cuda, batch_size=1, d
               )
         )
         
+        th = time.time()
         loss.backward()
         optimiser.step()
-        
-        train_losses.append(loss.detach().cpu().item())
-        train_accs.append(acc)
+        if profile:
+            ti = time.time()
+            
+            tt = ti-ta
+            tqdm.write("zg {zg:.2f}% bg {bg:.2f}% tt {tt:.2f}% tc {tc:.2f}% mo {mo:.2f}% me {me:.2f}% bk {bk:.2f}%".format(
+                    zg=100*(tb-ta)/tt,
+                    bg=100*(tc-tb)/tt,
+                    tt=100*(td-tc)/tt,
+                    tc=100*(te-td)/tt,
+                    mo=100*(tf-te)/tt,
+                    me=100*(tg-tf)/tt,
+                    bk=100*(ti-th)/tt,
+                    ))
         
     return train_losses, train_accs
 
-def test(model, images, labels, indexes, use_cuda, desc="Test ", disable_tqdm=False):
+def test(model, graphs, labels, indexes, use_cuda, desc="Test ", disable_tqdm=False):
     test_accs = []
     for i in tqdm(range(len(indexes)), total=len(indexes), desc=desc, disable=disable_tqdm):
         with torch.no_grad():
             idx = indexes[i]
         
-            graphs = [get_graph_from_image(images[idx])]
             batch_labels = labels[idx:idx+1]
-            pyt_labels = torch.tensor(batch_labels)
+            pyt_labels = torch.from_numpy(batch_labels)
             
-            h,adj,src,tgt,Msrc,Mtgt,Mgraph = batch_graphs(graphs)
-            h,adj,src,tgt,Msrc,Mtgt,Mgraph = map(torch.tensor,(h,adj,src,tgt,Msrc,Mtgt,Mgraph))
+            h,adj,src,tgt,Msrc,Mtgt,Mgraph = batch_graphs([graphs[idx]])
+            h,adj,src,tgt,Msrc,Mtgt,Mgraph = map(torch.from_numpy,(h,adj,src,tgt,Msrc,Mtgt,Mgraph))
             
             if use_cuda:
                 h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels = map(to_cuda,(h,adj,src,tgt,Msrc,Mtgt,Mgraph,pyt_labels))
