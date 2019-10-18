@@ -131,19 +131,42 @@ class GATLayerEdgeSoftmax(nn.Module):
         return o
 
 
+class GATLayerMultiHead(nn.Module):
+    
+    def __init__(self,d_in,d_out,num_heads):
+        super(GATLayerMultiHead,self).__init__()
+        
+        self.GAT_heads = nn.ModuleList(
+              [
+                GATLayerEdgeSoftmax(d_in,d_out)
+                for _ in range(num_heads)
+              ]
+        )
+    
+    def forward(self,x,adj,src,tgt,Msrc,Mtgt):
+        return torch.cat([l(x,adj,src,tgt,Msrc,Mtgt) for l in self.GAT_heads],dim=1)
+
+
 class GAT_MNIST(nn.Module):
     
-    def __init__(self,num_features,num_classes):
+    def __init__(self,num_features,num_classes,num_heads=[2,2,2]):
         super(GAT_MNIST,self).__init__()
         
+        self.layer_heads = [1]+num_heads
         self.GAT_layer_sizes = [num_features,32,64,64]
-        self.MLP_layer_sizes = [self.GAT_layer_sizes[-1],32,num_classes]
+        
+        self.MLP_layer_sizes = [self.layer_heads[-1]*self.GAT_layer_sizes[-1],32,num_classes]
         self.MLP_acts = [F.relu,lambda x:x]
         
         self.GAT_layers = nn.ModuleList(
               [
-                GATLayerEdgeSoftmax(d_in,d_out)
-                for d_in,d_out in zip(self.GAT_layer_sizes[:-1],self.GAT_layer_sizes[1:])
+                GATLayerMultiHead(d_in*heads_in,d_out,heads_out)
+                for d_in,d_out,heads_in,heads_out in zip(
+                    self.GAT_layer_sizes[:-1],
+                    self.GAT_layer_sizes[1:],
+                    self.layer_heads[:-1],
+                    self.layer_heads[1:],
+                )
               ]
         )
         self.MLP_layers = nn.ModuleList(
