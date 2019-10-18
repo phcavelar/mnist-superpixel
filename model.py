@@ -26,7 +26,7 @@ class GATLayerAdj(nn.Module):
         adj -> N,N adjacency matrix
         src -> E,i source index for edges
         tgt -> E,i target index for edges
-        Mtgt -> N,E adjacency matrix from source nodes to edges
+        Msrc -> N,E adjacency matrix from source nodes to edges
         Mtgt -> N,E adjacency matrix from target nodes to edges
         """
         N = x.size()[0]
@@ -70,7 +70,7 @@ class GATLayerEdgeAverage(nn.Module):
         adj -> N,N adjacency matrix
         src -> E,i source index for edges
         tgt -> E,i target index for edges
-        Mtgt -> N,E adjacency matrix from source nodes to edges
+        Msrc -> N,E adjacency matrix from source nodes to edges
         Mtgt -> N,E adjacency matrix from target nodes to edges
         """
         hsrc = x[src] # E,i
@@ -107,7 +107,7 @@ class GATLayerEdgeSoftmax(nn.Module):
         adj -> N,N adjacency matrix
         src -> E,i source index for edges
         tgt -> E,i target index for edges
-        Mtgt -> N,E adjacency matrix from source nodes to edges
+        Msrc -> N,E adjacency matrix from source nodes to edges
         Mtgt -> N,E adjacency matrix from target nodes to edges
         """
         hsrc = x[src] # E,i
